@@ -1,6 +1,9 @@
 name = "adminlottery99"
 compatibility_date = "2026-01-01"
 
+[vars]
+VITE_API_URL = "https://lottery888-api.afa94607.workers.dev"
+
 [assets]
 directory = "./dist"
 html_handling = "auto-trailing-slash"

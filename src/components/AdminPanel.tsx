@@ -32,6 +32,8 @@ import {
   FileText,
   Lock,
   Calendar,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import {
   ChannelLetter,
@@ -47,6 +49,10 @@ import {
   formatKHR,
   formatSignedKHR,
   formatTimer,
+  formatCambodiaDateYmd,
+  formatCambodiaTimeHms,
+  shiftYmdDate,
+  getDaysInMonth,
   CHANNEL_COLORS,
   padNumber,
   getRandomLotteryNumber,
@@ -197,28 +203,56 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [ownerConfirmPw, setOwnerConfirmPw] = useState('');
   const [changingOwnerPw, setChangingOwnerPw] = useState(false);
 
-  // Win/Loss Reports sub-views & filters (Adjustment 2)
+  // Win/Loss Reports sub-views & filters (Daily Asia/Phnom_Penh UTC+7 by default)
+  const todayYmd = formatCambodiaDateYmd(Date.now());
   const [reportSubView, setReportSubView] = useState<'overall' | 'player' | 'daily' | 'detailed'>(
     'overall'
   );
   const [reportSelectedPlayerId, setReportSelectedPlayerId] = useState<string>('ALL');
-  const [reportSelectedDate, setReportSelectedDate] = useState<string>('ALL');
+  const [reportSelectedDate, setReportSelectedDate] = useState<string>(todayYmd);
   const [reportStatusFilter, setReportStatusFilter] = useState<
     'SETTLED' | 'ALL' | 'WON' | 'LOST' | 'PENDING' | 'VOID'
   >('SETTLED');
 
-  const availableReportDates = useMemo(() => {
-    const dateSet = new Set<string>();
-    (reports.dailyReports || []).forEach((d) => dateSet.add(d.date));
-    (reports.detailedBets || []).forEach((b) => dateSet.add(b.dateYmd));
-    return Array.from(dateSet).sort((a, b) => b.localeCompare(a));
-  }, [reports.dailyReports, reports.detailedBets]);
+  const getBetReportDateYmd = (b: { status: string; timestamp: number; settledAt?: number | null; dateYmd: string }) => {
+    if (b.status === 'PENDING' || b.status === 'VOID') {
+      return formatCambodiaDateYmd(b.timestamp);
+    }
+    return b.dateYmd || formatCambodiaDateYmd(b.settledAt ?? b.timestamp);
+  };
+
+  const reportYearOptions = useMemo(() => {
+    const years = new Set<number>([parseInt(todayYmd.slice(0, 4), 10)]);
+    if (reportSelectedDate !== 'ALL') {
+      const sy = parseInt(reportSelectedDate.slice(0, 4), 10);
+      if (sy) years.add(sy);
+    }
+    (reports.dailyReports || []).forEach((d) => {
+      const y = parseInt(d.date.slice(0, 4), 10);
+      if (y) years.add(y);
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [reports.dailyReports, reportSelectedDate, todayYmd]);
+
+  const [repYear, repMonth, repDay] = useMemo(() => {
+    const base = reportSelectedDate === 'ALL' ? todayYmd : reportSelectedDate;
+    const parts = base.split('-').map((n) => parseInt(n, 10));
+    return [parts[0] || 2026, parts[1] || 1, parts[2] || 1];
+  }, [reportSelectedDate, todayYmd]);
+
+  const updateReportYmdParts = (y: number, m: number, d: number) => {
+    const maxD = getDaysInMonth(y, m);
+    const clampedD = Math.min(d, maxD);
+    setReportSelectedDate(
+      `${y}-${String(m).padStart(2, '0')}-${String(clampedD).padStart(2, '0')}`
+    );
+  };
 
   const filteredSettledBets = useMemo(() => {
     return (reports.detailedBets || []).filter((b) => {
       if (b.status !== 'WON' && b.status !== 'LOST') return false;
       if (reportSelectedPlayerId !== 'ALL' && b.userId !== reportSelectedPlayerId) return false;
-      if (reportSelectedDate !== 'ALL' && b.dateYmd !== reportSelectedDate) return false;
+      if (reportSelectedDate !== 'ALL' && getBetReportDateYmd(b) !== reportSelectedDate) return false;
       return true;
     });
   }, [reports.detailedBets, reportSelectedPlayerId, reportSelectedDate]);
@@ -328,17 +362,24 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const byDate = reportSelectedDate !== 'ALL';
     let list = basePlayers.map((pr) => {
       if (!byDate) return pr;
-      const dayBets = (reports.detailedBets || []).filter(
+      const daySettled = (reports.detailedBets || []).filter(
         (b) =>
           b.userId === pr.userId &&
-          b.dateYmd === reportSelectedDate &&
+          getBetReportDateYmd(b) === reportSelectedDate &&
           (b.status === 'WON' || b.status === 'LOST')
       );
-      const settledStaked = dayBets.reduce((s, b) => s + b.stake, 0);
-      const totalWon = dayBets.reduce((s, b) => s + b.payout, 0);
+      const dayPending = (reports.detailedBets || []).filter(
+        (b) =>
+          b.userId === pr.userId &&
+          getBetReportDateYmd(b) === reportSelectedDate &&
+          b.status === 'PENDING'
+      );
+      const settledStaked = daySettled.reduce((s, b) => s + b.stake, 0);
+      const totalWon = daySettled.reduce((s, b) => s + b.payout, 0);
       return {
         ...pr,
-        settledBetsCount: dayBets.length,
+        pendingBetsCount: dayPending.length,
+        settledBetsCount: daySettled.length,
         settledStaked,
         totalWon,
         playerNetProfitLoss: totalWon - settledStaked,
@@ -354,7 +395,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const filteredDetailedBets = useMemo(() => {
     return (reports.detailedBets || []).filter((b) => {
       if (reportSelectedPlayerId !== 'ALL' && b.userId !== reportSelectedPlayerId) return false;
-      if (reportSelectedDate !== 'ALL' && b.dateYmd !== reportSelectedDate) return false;
+      if (reportSelectedDate !== 'ALL' && getBetReportDateYmd(b) !== reportSelectedDate) return false;
       if (reportStatusFilter === 'SETTLED') return b.status === 'WON' || b.status === 'LOST';
       if (reportStatusFilter !== 'ALL') return b.status === reportStatusFilter;
       return true;
@@ -365,10 +406,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const settledCount = filteredSettledBets.length;
     const totalStake = filteredSettledBets.reduce((s, b) => s + b.stake, 0);
     const totalPayout = filteredSettledBets.reduce((s, b) => s + b.payout, 0);
+    let ownerProfit = 0;
+    let ownerLoss = 0;
+    for (const b of filteredSettledBets) {
+      const diff = b.stake - b.payout;
+      if (diff > 0) ownerProfit += diff;
+      else if (diff < 0) ownerLoss += Math.abs(diff);
+    }
     return {
       settledCount,
       totalStake,
       totalPayout,
+      ownerProfit,
+      ownerLoss,
       playerNet: totalPayout - totalStake,
       ownerNet: totalStake - totalPayout,
     };
@@ -859,25 +909,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </div>
 
-          {/* Total Valid Stakes */}
+          {/* Total Valid Stakes (All-Time) */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 shadow-sm">
             <div className="text-xs text-slate-400 font-semibold mb-1 flex items-center gap-1">
               <TrendingUp className="w-3.5 h-3.5 text-purple-400" />
-              សរុបភ្នាល់មានសុពលភាព
+              សរុបភ្នាល់មានសុពលភាព (All-Time)
             </div>
             <div className="font-mono text-lg sm:text-xl font-black text-white">
               {formatKHR(reports.totalValidStakes)}
             </div>
             <div className="text-[10px] text-slate-400 mt-0.5">
-              ទូទាត់រួច: {reports.settledBetsCount} | រង់ចាំ: {reports.pendingBetsCount}
+              All-Time • ទូទាត់រួច: {reports.settledBetsCount} | រង់ចាំ: {reports.pendingBetsCount}
             </div>
           </div>
 
-          {/* Total Payouts */}
+          {/* Total Payouts (All-Time) */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 shadow-sm">
             <div className="text-xs text-slate-400 font-semibold mb-1 flex items-center gap-1">
               <Coins className="w-3.5 h-3.5 text-rose-400" />
-              សរុបរង្វាន់បានសង
+              សរុបរង្វាន់បានសង (All-Time)
             </div>
             <div className="font-mono text-lg sm:text-xl font-black text-rose-400">
               {formatKHR(reports.totalWinningPayouts)}
@@ -890,11 +940,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </div>
 
-          {/* Owner Profit / Loss */}
+          {/* Owner Profit / Loss (All-Time) */}
           <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-3 shadow-sm">
             <div className="text-xs text-slate-400 font-semibold mb-1 flex items-center gap-1">
               <Award className="w-3.5 h-3.5 text-emerald-400" />
-              ចំណេញ/ខាត Owner (P/L)
+              ចំណេញ/ខាត Owner (All-Time)
             </div>
             <div
               className={`font-mono text-lg sm:text-xl font-black ${
@@ -904,7 +954,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               {formatKHR(reports.ownerRealizedProfitLoss)}
             </div>
             <div className="text-[10px] text-slate-400 mt-0.5">
-              {reports.ownerRealizedProfitLoss >= 0 ? 'ចំណេញសុទ្ធ (ទូទាត់រួច)' : 'ខាតសុទ្ធ (ទូទាត់រួច)'}
+              {reports.ownerRealizedProfitLoss >= 0 ? 'ចំណេញសុទ្ធ All-Time (ទូទាត់រួច)' : 'ខាតសុទ្ធ All-Time (ទូទាត់រួច)'}
             </div>
           </div>
         </div>
@@ -1911,10 +1961,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-black text-white">
-                    របាយការណ៍ឈ្នះចាញ់ជាក់ស្ដែង (Actual Win/Loss Reports — Asia/Phnom_Penh UTC+7)
+                    របាយការណ៍ឈ្នះចាញ់ជាក់ស្ដែង (Daily Win/Loss Reports — Asia/Phnom_Penh UTC+7)
                   </h2>
-                  <p className="text-xs text-slate-400">
-                    គណនាដោយផ្ទាល់ពីសំបុត្រទូទាត់រួចក្នុង Database (មិនរាប់បញ្ចូល Pending / Void និងដាច់ដោយឡែកពីការដាក់/ដកប្រាក់)
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    កាលបរិច្ឆេទរបាយការណ៍:{' '}
+                    <span className="font-mono font-bold text-amber-300 bg-slate-950 border border-amber-500/40 px-2 py-0.5 rounded">
+                      {reportSelectedDate === 'ALL' ? 'All-Time (គ្រប់កាលបរិច្ឆេទ)' : reportSelectedDate}
+                    </span>{' '}
+                    • គណនាដោយផ្ទាល់ពីសំបុត្រទូទាត់រួច (មិនរាប់បញ្ចូល Pending / Void)
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
@@ -1933,7 +1987,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </span>
                   </div>
                   <div className="bg-slate-950 border border-amber-500/40 px-3 py-1.5 rounded-xl">
-                    Owner Realized W/L:{' '}
+                    Owner Net W/L:{' '}
                     <span
                       className={
                         filteredReportTotals.ownerNet > 0
@@ -1949,8 +2003,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
               </div>
 
-              {/* Realized Summary Cards for Current Filter */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
+              {/* Daily Financial Summary Cards for Selected Date */}
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5 text-xs">
                 <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3">
                   <div className="text-slate-400 font-semibold">សំបុត្រទូទាត់រួច (Settled)</div>
                   <div className="font-mono text-base font-black text-white mt-0.5">
@@ -1958,7 +2012,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   </div>
                 </div>
                 <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3">
-                  <div className="text-slate-400 font-semibold">ប្រាក់ភ្នាល់សុពលភាព (Stakes)</div>
+                  <div className="text-slate-400 font-semibold">ប្រាក់ភ្នាល់ទូទាត់រួច (Stakes)</div>
                   <div className="font-mono text-base font-black text-white mt-0.5">
                     {formatKHR(filteredReportTotals.totalStake)}
                   </div>
@@ -1969,22 +2023,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     {formatKHR(filteredReportTotals.totalPayout)}
                   </div>
                 </div>
-                <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3">
-                  <div className="text-slate-400 font-semibold">Player Net Win/Loss</div>
-                  <div
-                    className={`font-mono text-base font-black mt-0.5 ${
-                      filteredReportTotals.playerNet > 0
-                        ? 'text-emerald-400'
-                        : filteredReportTotals.playerNet < 0
-                        ? 'text-rose-400'
-                        : 'text-slate-300'
-                    }`}
-                  >
-                    {formatSignedKHR(filteredReportTotals.playerNet)}
+                <div className="bg-slate-950/90 border border-emerald-500/30 rounded-xl p-3">
+                  <div className="text-emerald-300 font-semibold">ចំណេញ Owner (Profit)</div>
+                  <div className="font-mono text-base font-black text-emerald-400 mt-0.5">
+                    +{formatKHR(filteredReportTotals.ownerProfit)}
+                  </div>
+                </div>
+                <div className="bg-slate-950/90 border border-rose-500/30 rounded-xl p-3">
+                  <div className="text-rose-300 font-semibold">ខាត Owner (Loss)</div>
+                  <div className="font-mono text-base font-black text-rose-400 mt-0.5">
+                    -{formatKHR(filteredReportTotals.ownerLoss)}
                   </div>
                 </div>
                 <div className="bg-slate-950/90 border border-amber-500/30 rounded-xl p-3">
-                  <div className="text-amber-300 font-semibold">Game Owner Net Win/Loss</div>
+                  <div className="text-amber-300 font-semibold">Owner Net Win/Loss</div>
                   <div
                     className={`font-mono text-base font-black mt-0.5 ${
                       filteredReportTotals.ownerNet > 0
@@ -2045,30 +2097,117 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     </select>
                   </div>
 
-                  {/* Date Filter (Asia/Phnom_Penh YYYY-MM-DD) */}
-                  <div className="flex items-center gap-1.5 bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-1.5">
-                    <Calendar className="w-3.5 h-3.5 text-amber-400" />
-                    <select
-                      value={reportSelectedDate}
-                      onChange={(e) => setReportSelectedDate(e.target.value)}
-                      className="bg-transparent text-white font-mono text-xs focus:outline-none"
+                  {/* Year / Month / Day Selector + Previous / Next Day */}
+                  <div className="flex flex-wrap items-center gap-1 bg-slate-950 border border-slate-700 rounded-xl px-2 py-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.playClick();
+                        const base = reportSelectedDate === 'ALL' ? todayYmd : reportSelectedDate;
+                        setReportSelectedDate(shiftYmdDate(base, -1));
+                      }}
+                      className="p-1 rounded-lg hover:bg-slate-800 text-slate-300 flex items-center gap-0.5 font-semibold"
+                      title="Previous Day"
                     >
-                      <option value="ALL" className="bg-slate-900">
-                        គ្រប់កាលបរិច្ឆេទ (All Dates)
-                      </option>
-                      {availableReportDates.map((d) => (
-                        <option key={d} value={d} className="bg-slate-900">
-                          {d}
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">ថ្ងៃមុន</span>
+                    </button>
+
+                    <Calendar className="w-3.5 h-3.5 text-amber-400 ml-1" />
+                    <select
+                      aria-label="Report Year"
+                      value={repYear}
+                      onChange={(e) =>
+                        updateReportYmdParts(parseInt(e.target.value, 10), repMonth, repDay)
+                      }
+                      className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-white text-xs"
+                    >
+                      {reportYearOptions.map((y) => (
+                        <option key={y} value={y}>
+                          {y}
                         </option>
                       ))}
                     </select>
+                    <select
+                      aria-label="Report Month"
+                      value={repMonth}
+                      onChange={(e) =>
+                        updateReportYmdParts(repYear, parseInt(e.target.value, 10), repDay)
+                      }
+                      className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-white text-xs"
+                    >
+                      {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                        <option key={m} value={m}>
+                          {String(m).padStart(2, '0')}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Report Day"
+                      value={repDay}
+                      onChange={(e) =>
+                        updateReportYmdParts(repYear, repMonth, parseInt(e.target.value, 10))
+                      }
+                      className="bg-slate-900 border border-slate-700 rounded px-1.5 py-0.5 font-mono text-white text-xs"
+                    >
+                      {Array.from({ length: getDaysInMonth(repYear, repMonth) }, (_, i) => i + 1).map(
+                        (d) => (
+                          <option key={d} value={d}>
+                            {String(d).padStart(2, '0')}
+                          </option>
+                        )
+                      )}
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.playClick();
+                        const base = reportSelectedDate === 'ALL' ? todayYmd : reportSelectedDate;
+                        setReportSelectedDate(shiftYmdDate(base, 1));
+                      }}
+                      className="p-1 rounded-lg hover:bg-slate-800 text-slate-300 flex items-center gap-0.5 font-semibold"
+                      title="Next Day"
+                    >
+                      <span className="hidden sm:inline">ថ្ងៃបន្ទាប់</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.playClick();
+                        setReportSelectedDate(todayYmd);
+                      }}
+                      className={`ml-1 px-2 py-1 rounded-lg font-bold ${
+                        reportSelectedDate === todayYmd
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'bg-slate-800 text-slate-200 hover:bg-slate-700'
+                      }`}
+                    >
+                      ថ្ងៃនេះ
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.playClick();
+                        setReportSelectedDate('ALL');
+                      }}
+                      className={`px-2 py-1 rounded-lg font-bold ${
+                        reportSelectedDate === 'ALL'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                      }`}
+                    >
+                      All-Time
+                    </button>
                   </div>
 
-                  {(reportSelectedPlayerId !== 'ALL' || reportSelectedDate !== 'ALL') && (
+                  {(reportSelectedPlayerId !== 'ALL' || reportSelectedDate !== todayYmd) && (
                     <button
                       onClick={() => {
                         setReportSelectedPlayerId('ALL');
-                        setReportSelectedDate('ALL');
+                        setReportSelectedDate(todayYmd);
                       }}
                       className="px-2.5 py-1.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white font-bold"
                     >
@@ -2485,7 +2624,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider sticky top-0">
                       <tr>
-                        <th className="py-3 px-3">កាលបរិច្ឆេទ (Date)</th>
+                        <th className="py-3 px-3">កាលបរិច្ឆេទ & ម៉ោង (Date / Time)</th>
                         <th className="py-3 px-3">វេន (Round ID)</th>
                         <th className="py-3 px-3">អ្នកលេង (Player)</th>
                         <th className="py-3 px-3">ប៉ុស្តិ៍ / លេខ</th>
@@ -2506,10 +2645,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       ) : (
                         filteredDetailedBets.map((b) => {
                           const isSettled = b.status === 'WON' || b.status === 'LOST';
+                          const rowTs =
+                            isSettled && b.settledAt && b.settledAt > 0 ? b.settledAt : b.timestamp;
+                          const rowDateYmd = getBetReportDateYmd(b);
+                          const rowTimeHms = formatCambodiaTimeHms(rowTs);
                           return (
                             <tr key={b.ticketId} className="hover:bg-slate-700/40">
                               <td className="py-2.5 px-3 whitespace-nowrap">
-                                <div className="font-bold text-slate-200">{b.dateYmd}</div>
+                                <div className="font-bold text-slate-200">{rowDateYmd}</div>
+                                <div className="text-[11px] text-amber-300">{rowTimeHms}</div>
                                 <div className="text-[10px] text-slate-400">{b.ticketId}</div>
                               </td>
                               <td className="py-2.5 px-3 text-blue-300 font-bold whitespace-nowrap">
@@ -2829,26 +2973,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     <Coins className="w-5 h-5" />
                   </span>
                   <h2 className="text-lg font-black text-white">
-                    របាយការណ៍ហិរញ្ញវត្ថុប្រព័ន្ធ (Financial Summary)
+                    របាយការណ៍ហិរញ្ញវត្ថុប្រព័ន្ធ (All-Time Financial Summary)
                   </h2>
                 </div>
 
                 <div className="space-y-2.5">
                   <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-xs text-slate-400">សរុបប្រាក់ភ្នាល់មានសុពលភាព:</span>
+                    <span className="text-xs text-slate-400">សរុបប្រាក់ភ្នាល់មានសុពលភាព (All-Time):</span>
                     <span className="font-mono font-bold text-base text-white">
                       {formatKHR(reports.totalValidStakes)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800">
-                    <span className="text-xs text-slate-400">សរុបប្រាក់រង្វាន់បានសង:</span>
+                    <span className="text-xs text-slate-400">សរុបប្រាក់រង្វាន់បានសង (All-Time):</span>
                     <span className="font-mono font-bold text-base text-rose-400">
                       {formatKHR(reports.totalWinningPayouts)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-emerald-500/30">
                     <span className="text-xs font-bold text-emerald-400">
-                      ចំណេញ/ខាតសុទ្ធ Owner (Realized P/L):
+                      ចំណេញ/ខាតសុទ្ធ Owner (All-Time Realized P/L):
                     </span>
                     <span
                       className={`font-mono font-black text-lg ${

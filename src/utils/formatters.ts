@@ -26,6 +26,29 @@ export const formatCambodiaDateYmd = (timestampMs: number): string => {
   return `${y}-${m}-${d}`;
 };
 
+export const formatCambodiaTimeHms = (timestampMs: number): string => {
+  const safeMs = Number.isFinite(timestampMs) ? timestampMs : Date.now();
+  const kh = new Date(safeMs + CAMBODIA_UTC_OFFSET_MS);
+  const hh = String(kh.getUTCHours()).padStart(2, '0');
+  const mm = String(kh.getUTCMinutes()).padStart(2, '0');
+  const ss = String(kh.getUTCSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+};
+
+export const shiftYmdDate = (ymd: string, deltaDays: number): string => {
+  const [y, m, d] = ymd.split('-').map((n) => parseInt(n, 10));
+  if (!y || !m || !d) return formatCambodiaDateYmd(Date.now());
+  const dt = new Date(Date.UTC(y, m - 1, d + deltaDays));
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+};
+
+export const getDaysInMonth = (year: number, month: number): number => {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+};
+
 export const formatNumberOnly = (amount: number): string => {
   return new Intl.NumberFormat('en-US').format(Math.max(0, Math.round(amount)));
 };
