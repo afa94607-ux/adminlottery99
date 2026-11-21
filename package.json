@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 3001 --strictPort",
-    "build": "vite build",
+    "build": "vite build && node scripts/verify-build-api.mjs",
+    "verify:api": "node scripts/verify-build-api.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 3001",
     "lint": "tsc --noEmit"
   },

@@ -115,9 +115,15 @@ export default function App() {
     setReports(EMPTY_REPORTS);
   }, [ownerToken]);
 
-  const refreshAdminState = useCallback(async () => {
+  const roundEndTimeRef = useRef<number>(Date.now() + DEFAULT_SYSTEM_CONFIG.drawIntervalSeconds * 1000);
+  const roundDurationRef = useRef<number>(DEFAULT_SYSTEM_CONFIG.drawIntervalSeconds);
+  const isSystemOpenRef = useRef<boolean>(DEFAULT_SYSTEM_CONFIG.isSystemOpen);
+  const isDrawingRef = useRef<boolean>(false);
+  const lastRoundIdRef = useRef<string>('');
+
+  const refreshAdminState = useCallback(async (mode: 'full' | 'live' = 'full') => {
     if (!ownerToken) return;
-    const res = await lotteryApi.getAdminState(ownerToken);
+    const res = await lotteryApi.getAdminState(ownerToken, mode);
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
         await handleOwnerLogout();
@@ -127,27 +133,53 @@ export default function App() {
     const state = res.data;
     if (!state) return;
 
+    const prevRoundId = lastRoundIdRef.current;
+    const wasDrawing = isDrawingRef.current;
+    lastRoundIdRef.current = state.currentRoundId;
+    roundEndTimeRef.current = state.roundEndTime;
+    roundDurationRef.current = Math.max(
+      1,
+      state.roundDurationSeconds || state.systemConfig.drawIntervalSeconds || 300
+    );
+    isSystemOpenRef.current = state.systemConfig.isSystemOpen;
+    isDrawingRef.current = state.isDrawing;
+
     serverClockOffsetRef.current = Date.now() - state.serverTimestamp;
     setOwnerSession(state.owner);
     setCurrentRoundId(state.currentRoundId);
     setIsDrawing(state.isDrawing);
     setSystemConfig(state.systemConfig);
-    setPastRounds(state.pastRounds);
     setForcedNextNumbers(state.forcedNextNumbers);
     setPlayers(state.players);
-    setTickets(state.tickets);
-    setTransactions(state.transactions);
-    setReports(state.reports);
-    setAuditLogs(state.auditLogs);
+
+    if (mode === 'full') {
+      setPastRounds(state.pastRounds);
+      setTickets(state.tickets);
+      if (state.transactions) setTransactions(state.transactions);
+      if (state.reports) setReports(state.reports);
+      if (state.auditLogs) setAuditLogs(state.auditLogs);
+    } else {
+      setPastRounds((prev) => {
+        const map = new Map(prev.map((r) => [r.roundId, r]));
+        for (const r of state.pastRounds) map.set(r.roundId, r);
+        return Array.from(map.values())
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, 50);
+      });
+      setTickets((prev) => {
+        const map = new Map(prev.map((t) => [t.ticketId, t]));
+        for (const t of state.tickets) map.set(t.ticketId, t);
+        return Array.from(map.values())
+          .sort((a, b) => b.timestamp - a.timestamp)
+          .slice(0, 500);
+      });
+    }
 
     if (state.isDrawing) {
       setCountdownSeconds(0);
       setBettingClosed(true);
     } else {
-      const maxDuration = Math.max(
-        1,
-        state.roundDurationSeconds || state.systemConfig.drawIntervalSeconds || 300
-      );
+      const maxDuration = roundDurationRef.current;
       const remaining = Math.min(
         maxDuration,
         Math.max(
@@ -160,20 +192,65 @@ export default function App() {
         Boolean(state.bettingClosed) || !state.systemConfig.isSystemOpen || remaining <= 0
       );
     }
+
+    // When a round settles or changes, fetch full financial reports once
+    if (mode === 'live' && ((prevRoundId && prevRoundId !== state.currentRoundId) || (wasDrawing && !state.isDrawing))) {
+      void refreshAdminState('full');
+    }
   }, [ownerToken, handleOwnerLogout]);
 
   useEffect(() => {
     if (!ownerToken || !ownerSession) return;
-    refreshAdminState();
-    const interval = window.setInterval(refreshAdminState, 1000);
-    const handleOnline = () => refreshAdminState();
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    void refreshAdminState('full');
+
+    // Local 1s countdown UI tick (0 D1 reads)
+    const uiTick = window.setInterval(() => {
+      if (isDrawingRef.current) {
+        setCountdownSeconds(0);
+        setBettingClosed(true);
+        return;
+      }
+      const maxDuration = roundDurationRef.current;
+      const remaining = Math.min(
+        maxDuration,
+        Math.max(
+          0,
+          Math.ceil((roundEndTimeRef.current - (Date.now() - serverClockOffsetRef.current)) / 1000)
+        )
+      );
+      setCountdownSeconds(remaining);
+      setBettingClosed(!isSystemOpenRef.current || remaining <= 0);
+    }, 1000);
+
+    // Adaptive server sync: 2s near/during draw, 10s otherwise
+    const scheduleNextSync = () => {
+      if (cancelled) return;
+      const remaining = Math.max(
+        0,
+        Math.ceil((roundEndTimeRef.current - (Date.now() - serverClockOffsetRef.current)) / 1000)
+      );
+      const delayMs = isDrawingRef.current || remaining <= 8 ? 2000 : 10000;
+      timerId = window.setTimeout(async () => {
+        if (cancelled) return;
+        await refreshAdminState('live');
+        scheduleNextSync();
+      }, delayMs);
+    };
+    scheduleNextSync();
+
+    const handleOnline = () => void refreshAdminState('live');
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') refreshAdminState();
+      if (document.visibilityState === 'visible') void refreshAdminState('full');
     };
     window.addEventListener('online', handleOnline);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
-      window.clearInterval(interval);
+      cancelled = true;
+      window.clearInterval(uiTick);
+      if (timerId !== null) window.clearTimeout(timerId);
       window.removeEventListener('online', handleOnline);
       document.removeEventListener('visibilitychange', handleVisibility);
     };

@@ -38,13 +38,14 @@ export interface PlayerStateResponse extends PublicLotteryState {
 }
 
 export interface AdminStateResponse extends PublicLotteryState {
+  mode?: 'full' | 'live';
   owner: AppUser;
   forcedNextNumbers: Record<ChannelLetter, string> | null;
   players: AppUser[];
   tickets: BetTicket[];
-  transactions: BalanceTransaction[];
-  reports: FinancialReportsSummary;
-  auditLogs: AuditLogEntry[];
+  transactions?: BalanceTransaction[];
+  reports?: FinancialReportsSummary;
+  auditLogs?: AuditLogEntry[];
 }
 
 export interface ApiResult<T> {
@@ -55,7 +56,7 @@ export interface ApiResult<T> {
   code?: string;
 }
 
-const getApiBase = (): string => {
+export const getApiBase = (): string => {
   const envApi = (import.meta as unknown as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL;
   if (envApi) return envApi.replace(/\/+$/, '');
   if (typeof window !== 'undefined') {
@@ -165,8 +166,9 @@ export const lotteryApi = {
   },
 
   // Owner Admin endpoints
-  getAdminState(token: string) {
-    return requestJson<AdminStateResponse>('/api/admin/state', { token });
+  getAdminState(token: string, mode: 'full' | 'live' = 'full') {
+    const qs = mode === 'live' ? '?mode=live' : '';
+    return requestJson<AdminStateResponse>(`/api/admin/state${qs}`, { token });
   },
 
   changeOwnerPassword(token: string, currentPassword: string, newPassword: string) {
