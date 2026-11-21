@@ -61,6 +61,9 @@ const getApiBase = (): string => {
   if (typeof window !== 'undefined') {
     const customApi = (window as unknown as { VITE_API_URL?: string }).VITE_API_URL;
     if (customApi) return customApi.replace(/\/+$/, '');
+    if (window.location.hostname === 'adminlottery99.afa94607.workers.dev') {
+      return 'https://lottery888-api.afa94607.workers.dev';
+    }
   }
   return '';
 };
