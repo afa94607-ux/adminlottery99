@@ -59,6 +59,8 @@ import {
 } from '../utils/formatters';
 import { sound } from '../utils/audio';
 import { OwnerBettingRiskPanel } from './OwnerBettingRiskPanel';
+import { NextRoundResultDraft } from './NextRoundResultDraft';
+import { ADMIN_LANG_STORAGE_KEY, AdminLang } from '../utils/adminI18n';
 
 export interface CreatePlayerInput {
   id?: string;
@@ -152,6 +154,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [activeTab, setActiveTab] = useState<
     'inplay' | 'users' | 'cashier' | 'draws' | 'reports' | 'system'
   >('inplay');
+
+  const [adminLang, setAdminLang] = useState<AdminLang>(() => {
+    try {
+      return localStorage.getItem(ADMIN_LANG_STORAGE_KEY) === 'km' ? 'km' : 'en';
+    } catch {
+      return 'en';
+    }
+  });
+  const handleChangeAdminLang = (next: AdminLang) => {
+    setAdminLang(next);
+    try {
+      localStorage.setItem(ADMIN_LANG_STORAGE_KEY, next);
+    } catch {}
+  };
 
   // Toast feedback banner
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(
@@ -1162,6 +1178,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             payoutRate={systemConfig.payoutRate}
             lastUpdatedAt={lastUpdatedAt}
             syncError={syncError}
+            lang={adminLang}
+            onChangeLang={handleChangeAdminLang}
           />
 
           <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl overflow-hidden shadow-lg">
@@ -1880,6 +1898,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             )}
           </div>
+
+          <NextRoundResultDraft
+            currentRoundId={currentRoundId}
+            lang={adminLang}
+            onChangeLang={handleChangeAdminLang}
+          />
 
           <div className="bg-slate-800/80 border border-slate-700/80 rounded-2xl overflow-hidden shadow-lg">
             <div className="p-4 bg-slate-900/90 border-b border-slate-700 flex flex-wrap items-center justify-between gap-3">
