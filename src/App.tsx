@@ -92,6 +92,8 @@ export default function App() {
   const [transactions, setTransactions] = useState<BalanceTransaction[]>([]);
   const [reports, setReports] = useState<FinancialReportsSummary>(EMPTY_REPORTS);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const serverClockOffsetRef = useRef<number>(0);
 
@@ -127,11 +129,15 @@ export default function App() {
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) {
         await handleOwnerLogout();
+      } else {
+        setSyncError(res.error || 'Sync error — retrying');
       }
       return;
     }
     const state = res.data;
     if (!state) return;
+    setSyncError(null);
+    setLastUpdatedAt(Date.now());
 
     const prevRoundId = lastRoundIdRef.current;
     const wasDrawing = isDrawingRef.current;
@@ -421,6 +427,8 @@ export default function App() {
             onResetHistory={handleResetHistory}
             reports={reports}
             auditLogs={auditLogs}
+            lastUpdatedAt={lastUpdatedAt}
+            syncError={syncError}
             onOpenGameInNewTab={handleOpenGamePortal}
           />
         </div>
